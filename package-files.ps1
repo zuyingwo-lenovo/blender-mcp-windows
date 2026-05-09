@@ -7,11 +7,14 @@ $ErrorActionPreference = "Stop"
 
 $SourceDir = $PSScriptRoot
 $DateStr = Get-Date -Format "yyyy-MM-dd"
-$Version = "v1.0"
-$ZipName = "blender-mcp-windows-installer-$Version-$DateStr.zip"
-$ZipPath = Join-Path (Split-Path $SourceDir -Parent) $ZipName
+$Version = "v1.0.0"
+$DistDir = Join-Path $SourceDir "dist"
+if (-not (Test-Path $DistDir)) { New-Item -ItemType Directory -Path $DistDir | Out-Null }
 
-Write-Host "开始打包部署文件..." -ForegroundColor Cyan
+$ZipName = "blender-mcp-windows-installer-$Version-$DateStr.zip"
+$ZipPath = Join-Path $DistDir $ZipName
+
+Write-Host "开始打包部署文件 (版本: $Version)..." -ForegroundColor Cyan
 
 # 检查必需文件
 $RequiredFiles = @(
@@ -20,7 +23,9 @@ $RequiredFiles = @(
     "start-blender-mcp.ps1",
     "uninstall-blender-mcp.ps1",
     "config-example.json",
+    "README.md",
     "README-部署说明.md",
+    "LICENSE",
     "package-files.ps1"
 )
 
@@ -48,9 +53,16 @@ try {
         Remove-Item $ZipPath -Force
     }
     
-    Compress-Archive -Path "$SourceDir\*" -DestinationPath $ZipPath -Force
+    Compress-Archive -Path $RequiredFiles -DestinationPath $ZipPath -Force
+    
+    # 生成校验和
+    $Checksum = Get-FileHash -Path $ZipPath -Algorithm SHA256
+    $ChecksumPath = "$ZipPath.sha256"
+    $Checksum.Hash | Out-File -FilePath $ChecksumPath -Encoding ascii
+    
     Write-Host "[成功] 打包完成！" -ForegroundColor Green
     Write-Host "ZIP 文件路径: $ZipPath" -ForegroundColor Cyan
+    Write-Host "SHA256 校验和: $ChecksumPath" -ForegroundColor Cyan
 } catch {
     Write-Host "[错误] 打包失败: $_" -ForegroundColor Red
 }

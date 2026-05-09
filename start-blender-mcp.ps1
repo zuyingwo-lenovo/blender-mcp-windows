@@ -9,8 +9,8 @@ Write-Host "=======================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "请严格按照以下顺序启动，以确保连接成功：" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "1. 启动 Antigravity 客户端" -ForegroundColor White
-Write-Host "   (客户端会自动在后台通过 uvx 启动 MCP Server)" -ForegroundColor Gray
+Write-Host "1. 启动您的 MCP 客户端 (Claude Desktop / Cursor / Windsurf 等)" -ForegroundColor White
+Write-Host "   (客户端会自动在后台启动 MCP Server)" -ForegroundColor Gray
 Write-Host ""
 Write-Host "2. 启动 Blender" -ForegroundColor White
 Write-Host "   (打开您的工程文件)" -ForegroundColor Gray

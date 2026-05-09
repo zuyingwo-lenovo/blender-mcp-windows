@@ -1,63 +1,57 @@
 # Blender MCP Windows Deployment Toolkit
 
 ## 1. Overview
-This toolkit provides a "one-click" deployment solution for [Blender MCP](https://github.com/ahujasid/blender-mcp) on Windows. It automates environment checks, installs the `uv` package manager, downloads the latest Blender addon, and assists in configuring your favorite MCP client (Claude Desktop, Cursor, or Windsurf).
+This toolkit provides a **semi-automated** deployment solution for [Blender MCP](https://github.com/ahujasid/blender-mcp) on Windows. It automates environment checks, installs the `uv` package manager, downloads the `addon.py`, and safely updates your MCP client configurations.
+
+> **Note:** "One-click" refers to the automation of dependency setup and configuration writing. Enabling the Add-on within Blender's UI still requires manual user interaction.
 
 ## 2. Prerequisites
 - **Windows 10/11**
-- **Python 3.10+** installed
-- **Blender 3.0+** installed (the script will attempt to locate it automatically)
-- Internet connection (to access GitHub and PyPI)
+- **Python 3.10+** (Added to PATH)
+- **Blender 3.0+**
+- Internet connection
 
-## 3. File Structure
-```text
-blender-mcp-windows-installer/
-├─ install-blender-mcp.bat    # Launcher (Run this!)
-├─ install-blender-mcp.ps1    # Core deployment logic
-├─ start-blender-mcp.ps1      # Startup order guide
-├─ uninstall-blender-mcp.ps1  # Cleanup script
-├─ config-example.json        # Configuration reference
-├─ README.md                  # This document
-└─ logs/                      # Installation logs
-```
+## 3. Support Matrix
+
+| Client | Auto-Detect | Auto-Write | Config Path Reliability | Status |
+| :--- | :---: | :---: | :---: | :--- |
+| Claude Desktop | Yes | Yes | High | Supported |
+| Cursor | Yes | Yes | Medium | Supported |
+| Windsurf | Yes | Yes | Medium | Supported |
+| Claude Code | No | No | High | Planned (v1.1) |
+| VS Code / Cline| No | No | Medium | Planned (v1.2) |
 
 ## 4. How to Install
-1. Place the folder in your desired workspace.
-2. **Double-click `install-blender-mcp.bat`**.
-3. The script will request Administrator privileges to perform environment setup.
-4. Follow the on-screen prompts:
-   - The script will search for your Blender installation.
-   - It will scan for supported MCP clients (Claude, Cursor, Windsurf).
-   - You can choose which client to configure automatically.
-   - If no client is detected, you can skip or manually provide a path to your config file.
+1. **Double-click `install-blender-mcp.bat`**.
+2. The script will install the toolkit to `%LOCALAPPDATA%\blender-mcp-windows` (No Administrator privileges required by default).
+3. Follow the on-screen prompts to choose which MCP client to configure.
+4. **Safety First:** A `.bak` backup of your config is created automatically before any modification.
 
 ## 5. Final Setup & Verification
 
 ### 5.1 Enable the Addon in Blender
 1. Open Blender.
 2. Go to `Edit` -> `Preferences` -> `Add-ons`.
-3. Click the `Install...` button in the top right.
-4. Navigate to `C:\MCP\blender-mcp`, select `addon.py`, and click `Install Add-on`.
-5. Check the box next to `Interface: Blender MCP` to enable it.
+3. Click `Install...` and select `addon.py` from your installation directory (e.g., `%LOCALAPPDATA%\blender-mcp-windows\addon.py`).
+4. Enable `Interface: Blender MCP`.
 
 ### 5.2 Connection Sequence
-**Strict startup order is required:**
-1. **Open** your MCP Client (Claude Desktop, Cursor, etc.) first.
-2. **Open** Blender.
-3. In Blender's 3D View, press `N` to open the sidebar.
-4. Locate the `Blender MCP` tab at the bottom.
-5. Click the `Connect to Claude` (or `Start MCP Server`) button.
+1. **Launch** your MCP Client (Claude Desktop, Cursor, etc.).
+2. **Launch** Blender.
+3. In Blender's 3D View, press `N` for the sidebar -> `Blender MCP` -> `Connect`.
 
-## 6. Troubleshooting
-- **`uvx` command not found**: The script adds `uv` to your PATH. If your client still can't find it, try restarting your computer or the client app.
-- **Connection Failed/Timeout**: Ensure you follow the exact startup sequence in section 5.2.
-- **Permissions**: Ensure you run the `.bat` file with enough privileges (it should prompt for UAC).
+## 6. Security Considerations
+- **Code Execution:** The `execute_blender_code` tool allows the AI to run arbitrary Python code within Blender. Only connect to trusted MCP clients.
+- **Save Work:** Always save your `.blend` files before running AI operations.
+- **External Assets:** Tools like PolyHaven, Sketchfab, and Hyper3D will access external servers to download 3D assets.
+- **Telemetry:** Disabled by default (`DISABLE_TELEMETRY=true`).
 
-## 7. Uninstallation
-1. Disable and remove the addon within Blender.
-2. Remove the `blender` entry from your MCP client configuration.
-3. Run `uninstall-blender-mcp.ps1` to delete the `C:\MCP\blender-mcp` directory.
+## 7. Attribution & License
+- **Upstream Project:** [ahujasid/blender-mcp](https://github.com/ahujasid/blender-mcp) (MIT License).
+- **This Toolkit:** Licensed under the [MIT License](LICENSE). 
+- *Note: This installer is not affiliated with the upstream BlenderMCP project.*
 
-## 8. Important Notes
-- This script disables telemetry by default (`DISABLE_TELEMETRY=true`).
-- A `.bak` backup file is automatically created before modifying any configuration files.
+## 8. Troubleshooting
+- **`uvx` not found:** Restart your MCP client after installation to refresh environment variables.
+- **First Run Delay:** The very first time you use the tool in your MCP client, `uvx` will download the required packages. This may take 1-2 minutes.
+- **Multiple Instances:** Do not run multiple MCP clients (e.g., Cursor and Claude Desktop) simultaneously with the Blender server.

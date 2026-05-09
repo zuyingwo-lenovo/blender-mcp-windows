@@ -1,9 +1,22 @@
 <#
 .SYNOPSIS
-    Blender MCP Windows 一键部署脚本 (兼容 PowerShell 5.1)
+    Blender MCP Windows 部署脚本 (兼容 PowerShell 5.1)
 .DESCRIPTION
     此脚本用于在 Windows 环境下自动部署 Blender MCP。
+    支持配置备份、回滚、校验以及非管理员安装。
+.PARAMETER InstallDir
+    插件下载及安装目录。默认为用户本地 AppData 目录。
+.PARAMETER UpstreamRef
+    上游 addon.py 的 Git 引用 (branch/commit/tag)。默认为 main。
+.PARAMETER SkipConfig
+    如果设置，将跳过 MCP 客户端配置写入。
 #>
+
+param(
+    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "blender-mcp-windows"),
+    [string]$UpstreamRef = "main",
+    [switch]$SkipConfig
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -53,6 +66,72 @@ function Convert-ObjectToHashtable {
         return $hash
     } else {
         return $InputObject
+    }
+}
+
+# P0: 安全更新 MCP 配置 (带备份、校验与回滚)
+function Update-McpConfigSafely {
+    param(
+        [Parameter(Mandatory=$true)][string]$ConfigPath,
+        [Parameter(Mandatory=$true)][hashtable]$ServerConfig
+    )
+
+    $Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $BackupPath = "$ConfigPath.bak_$Timestamp"
+    $TempPath = "$ConfigPath.tmp_$Timestamp"
+
+    Write-Log "正在准备更新配置文件: $ConfigPath" "INFO"
+
+    try {
+        # 1. 创建备份
+        if (Test-Path $ConfigPath) {
+            Copy-Item -Path $ConfigPath -Destination $BackupPath -Force
+            Write-Log "已创建备份: $BackupPath" "SUCCESS"
+        }
+
+        # 2. 读取并准备新内容
+        $JsonRaw = "{}"
+        if (Test-Path $ConfigPath) {
+            $JsonRaw = Get-Content -Path $ConfigPath -Raw
+            if ([string]::IsNullOrWhiteSpace($JsonRaw)) { $JsonRaw = "{}" }
+        }
+
+        $RawObj = $JsonRaw | ConvertFrom-Json
+        $JsonContent = Convert-ObjectToHashtable $RawObj
+        if ($null -eq $JsonContent) { $JsonContent = @{} }
+
+        if (-not $JsonContent.ContainsKey("mcpServers")) {
+            $JsonContent["mcpServers"] = @{}
+        }
+
+        $JsonContent["mcpServers"]["blender"] = $ServerConfig
+
+        # 3. 序列化并写入临时文件
+        $NewJson = $JsonContent | ConvertTo-Json -Depth 20
+        
+        # 写入前验证新 JSON 是否有效
+        $null = $NewJson | ConvertFrom-Json
+        
+        Set-Content -Path $TempPath -Value $NewJson -Encoding UTF8
+
+        # 4. 再次验证临时文件
+        $TempVerify = Get-Content -Path $TempPath -Raw
+        $null = $TempVerify | ConvertFrom-Json
+
+        # 5. 原子替换
+        Move-Item -Path $TempPath -Destination $ConfigPath -Force
+        Write-Log "配置文件已安全更新。" "SUCCESS"
+    }
+    catch {
+        Write-Log "配置更新失败: $_" "ERROR"
+        if (Test-Path $TempPath) { Remove-Item $TempPath -Force -ErrorAction SilentlyContinue }
+        
+        if (Test-Path $BackupPath) {
+            Write-Log "正在尝试从备份回滚..." "WARN"
+            Copy-Item -Path $BackupPath -Destination $ConfigPath -Force
+            Write-Log "已回滚至备份状态。" "SUCCESS"
+        }
+        throw "配置更新流程中断。"
     }
 }
 
@@ -107,8 +186,19 @@ try {
     # 1. 检查 Python
     Write-Log "正在检测 Python 环境..." "INFO"
     try {
-        $PythonVersion = & python --version 2>&1
-        Write-Log "检测到 Python: $PythonVersion" "SUCCESS"
+        $pyRaw = & python -c "import sys; print('{}.{}'.format(sys.version_info.major, sys.version_info.minor))" 2>&1
+        if ($pyRaw -match "^(\d+\.\d+)") {
+            $version = [version]$matches[1]
+            if ($version -ge [version]"3.10") {
+                Write-Log "检测到 Python $version" "SUCCESS"
+            } else {
+                Write-Log "检测到 Python $version，但需要 3.10+。请升级 Python。" "ERROR"
+                Read-Host "按回车键退出"
+                exit
+            }
+        } else {
+            Write-Log "无法解析 Python 版本: $pyRaw" "WARN"
+        }
     } catch {
         Write-Log "未检测到 Python。请先安装 Python 3.10+ 并添加到 PATH。" "ERROR"
         Read-Host "按回车键退出"
@@ -140,8 +230,11 @@ try {
             }
             Write-Log "uv 安装完成。" "SUCCESS"
         } catch {
-            Write-Log "uv 自动安装失败，请手动安装: https://astral.sh/uv" "WARN"
         }
+    }
+
+    if ($UvInstalled) {
+        Write-Log "uv 环境准备就绪。" "SUCCESS"
     }
 
     # 3. 检查 Blender
@@ -153,12 +246,12 @@ try {
         Write-Log "检测到 Blender: $BlenderPath" "SUCCESS"
     }
 
-    $InstallDir = "C:\MCP\blender-mcp"
     if (-not (Test-Path $InstallDir)) {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+        Write-Log "创建安装目录: $InstallDir" "INFO"
     }
 
-    $AddonUrl = "https://raw.githubusercontent.com/ahujasid/blender-mcp/main/addon.py"
+    $AddonUrl = "https://raw.githubusercontent.com/ahujasid/blender-mcp/$UpstreamRef/addon.py"
     $AddonDest = Join-Path $InstallDir "addon.py"
 
     try {
@@ -191,42 +284,23 @@ try {
         $ConfigPath = Read-Host "请输入 MCP 配置文件路径 (留空跳过)"
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
-        if (Test-Path $ConfigPath) {
-            # 兼容性处理：ConvertFrom-Json 不带 -AsHashtable
-            $JsonRaw = Get-Content -Path $ConfigPath -Raw
-            if ([string]::IsNullOrWhiteSpace($JsonRaw)) { $JsonRaw = "{}" }
-            
-            $RawObj = $JsonRaw | ConvertFrom-Json
-            $JsonContent = Convert-ObjectToHashtable $RawObj
-            
-            if ($null -eq $JsonContent) { $JsonContent = @{} }
-            if (-not $JsonContent.ContainsKey("mcpServers")) {
-                $JsonContent.Add("mcpServers", @{})
+    if (-not $SkipConfig -and -not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+        $BlenderConfig = @{
+            command = "cmd"
+            args = @("/c", "uvx", "blender-mcp")
+            env = @{
+                BLENDER_HOST = "localhost"
+                BLENDER_PORT = "9876"
+                DISABLE_TELEMETRY = "true"
             }
-
-            $BlenderConfig = @{
-                command = "cmd"
-                args = @("/c", "uvx", "blender-mcp")
-                env = @{
-                    BLENDER_HOST = "localhost"
-                    BLENDER_PORT = "9876"
-                    DISABLE_TELEMETRY = "true"
-                }
-            }
-            $JsonContent["mcpServers"]["blender"] = $BlenderConfig
-
-            $NewJson = $JsonContent | ConvertTo-Json -Depth 10
-            Set-Content -Path $ConfigPath -Value $NewJson -Encoding UTF8
-            Write-Log "已成功更新配置: $ConfigPath" "SUCCESS"
-        } else {
-            Write-Log "找不到配置文件: $ConfigPath" "WARN"
         }
+        Update-McpConfigSafely -ConfigPath $ConfigPath -ServerConfig $BlenderConfig
     }
 
     Write-Log "=======================================" "INFO"
     Write-Log "部署完成！" "SUCCESS"
-    Write-Log "请按照 README 说明在 Blender 中安装插件并启用。" "INFO"
+    Write-Log "1. 请按照 README 说明在 Blender 中安装插件并启用。" "INFO"
+    Write-Log "2. 提示：请勿同时运行多个 MCP 客户端 (如 Cursor 和 Claude) 连接同一个 Blender 实例。" "WARN"
 } catch {
     Write-Log "发生意外错误: $_" "ERROR"
     Write-Log $_.ScriptStackTrace "ERROR"
