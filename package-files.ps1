@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 
 $SourceDir = $PSScriptRoot
 $DateStr = Get-Date -Format "yyyy-MM-dd"
-$Version = "v1.0.0"
+$Version = "v0.9.1"
 $DistDir = Join-Path $SourceDir "dist"
 if (-not (Test-Path $DistDir)) { New-Item -ItemType Directory -Path $DistDir | Out-Null }
 
@@ -16,7 +16,7 @@ $ZipPath = Join-Path $DistDir $ZipName
 
 Write-Host "开始打包部署文件 (版本: $Version)..." -ForegroundColor Cyan
 
-# 检查必需文件
+# 必需文件清单 (P0)
 $RequiredFiles = @(
     "install-blender-mcp.ps1",
     "install-blender-mcp.bat",

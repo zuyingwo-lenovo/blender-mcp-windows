@@ -8,14 +8,17 @@
     插件下载及安装目录。默认为用户本地 AppData 目录。
 .PARAMETER UpstreamRef
     上游 addon.py 的 Git 引用 (branch/commit/tag)。默认为 main。
-.PARAMETER SkipConfig
+.PARAMETER NoConfigWrite
     如果设置，将跳过 MCP 客户端配置写入。
+.PARAMETER DryRun
+    模拟运行，不执行任何实际的写入或下载操作。
 #>
 
 param(
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "blender-mcp-windows"),
     [string]$UpstreamRef = "main",
-    [switch]$SkipConfig
+    [switch]$NoConfigWrite,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -82,6 +85,11 @@ function Update-McpConfigSafely {
 
     Write-Log "正在准备更新配置文件: $ConfigPath" "INFO"
 
+    if ($DryRun) {
+        Write-Log "[DryRun] 跳过配置文件更新和备份。" "INFO"
+        return
+    }
+
     try {
         # 1. 创建备份
         if (Test-Path $ConfigPath) {
@@ -96,6 +104,9 @@ function Update-McpConfigSafely {
             if ([string]::IsNullOrWhiteSpace($JsonRaw)) { $JsonRaw = "{}" }
         }
 
+        # 校验原始 JSON (如果存在)
+        try { $null = $JsonRaw | ConvertFrom-Json } catch { throw "原配置文件内容不是有效的 JSON。" }
+
         $RawObj = $JsonRaw | ConvertFrom-Json
         $JsonContent = Convert-ObjectToHashtable $RawObj
         if ($null -eq $JsonContent) { $JsonContent = @{} }
@@ -109,14 +120,14 @@ function Update-McpConfigSafely {
         # 3. 序列化并写入临时文件
         $NewJson = $JsonContent | ConvertTo-Json -Depth 20
         
-        # 写入前验证新 JSON 是否有效
-        $null = $NewJson | ConvertFrom-Json
+        # 写入前再次验证生成的 JSON
+        try { $null = $NewJson | ConvertFrom-Json } catch { throw "生成的新配置内容不是有效的 JSON。" }
         
         Set-Content -Path $TempPath -Value $NewJson -Encoding UTF8
 
         # 4. 再次验证临时文件
         $TempVerify = Get-Content -Path $TempPath -Raw
-        $null = $TempVerify | ConvertFrom-Json
+        try { $null = $TempVerify | ConvertFrom-Json } catch { throw "临时文件内容验证失败。" }
 
         # 5. 原子替换
         Move-Item -Path $TempPath -Destination $ConfigPath -Force
@@ -127,9 +138,9 @@ function Update-McpConfigSafely {
         if (Test-Path $TempPath) { Remove-Item $TempPath -Force -ErrorAction SilentlyContinue }
         
         if (Test-Path $BackupPath) {
-            Write-Log "正在尝试从备份回滚..." "WARN"
+            Write-Log "正在尝试从备份回滚: $BackupPath" "WARN"
             Copy-Item -Path $BackupPath -Destination $ConfigPath -Force
-            Write-Log "已回滚至备份状态。" "SUCCESS"
+            Write-Log "已从备份成功回滚。" "SUCCESS"
         }
         throw "配置更新流程中断。"
     }
@@ -209,32 +220,47 @@ try {
     Write-Log "正在检测 uv 包管理器..." "INFO"
     $UvInstalled = $false
     try {
-        $UvVersion = & uv --version 2>&1
-        Write-Log "检测到 uv: $UvVersion" "SUCCESS"
+        $null = & uv --version 2>&1
         $UvInstalled = $true
     } catch {
         Write-Log "未检测到 uv，准备自动安装..." "INFO"
     }
 
     if (-not $UvInstalled) {
-        try {
-            Write-Log "正在下载并安装 uv..." "INFO"
-            Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1" -OutFile "$env:TEMP\install_uv.ps1" -UseBasicParsing
-            & "$env:TEMP\install_uv.ps1"
-            
-            $localBin = "$env:USERPROFILE\.local\bin"
-            $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-            if ($userPath -notmatch [regex]::Escape($localBin)) {
-                [Environment]::SetEnvironmentVariable("Path", "$userPath;$localBin", "User")
-                $env:Path = "$env:Path;$localBin"
+        if ($DryRun) {
+            Write-Log "[DryRun] 跳过 uv 安装。" "INFO"
+        } else {
+            try {
+                Write-Log "正在下载并安装 uv..." "INFO"
+                Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1" -OutFile "$env:TEMP\install_uv.ps1" -UseBasicParsing
+                & "$env:TEMP\install_uv.ps1"
+                
+                $localBin = "$env:USERPROFILE\.local\bin"
+                $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+                if ($userPath -notmatch [regex]::Escape($localBin)) {
+                    [Environment]::SetEnvironmentVariable("Path", "$userPath;$localBin", "User")
+                    $env:Path = "$env:Path;$localBin"
+                }
+                Write-Log "uv 安装完成。" "SUCCESS"
+                $UvInstalled = $true
+            } catch {
+                Write-Log "uv 自动安装失败，请手动安装: https://astral.sh/uv" "ERROR"
+                Read-Host "按回车键退出"
+                exit
             }
-            Write-Log "uv 安装完成。" "SUCCESS"
-        } catch {
         }
     }
 
     if ($UvInstalled) {
-        Write-Log "uv 环境准备就绪。" "SUCCESS"
+        Write-Log "正在验证 uv 可用性..." "INFO"
+        try {
+            $UvVersion = & uv --version 2>&1
+            Write-Log "uv 验证成功: $UvVersion" "SUCCESS"
+        } catch {
+            Write-Log "uvx/uv 验证失败。请尝试重启终端或检查 PATH。" "ERROR"
+            Read-Host "按回车键退出"
+            exit
+        }
     }
 
     # 3. 检查 Blender
@@ -247,19 +273,28 @@ try {
     }
 
     if (-not (Test-Path $InstallDir)) {
-        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-        Write-Log "创建安装目录: $InstallDir" "INFO"
+        if ($DryRun) {
+            Write-Log "[DryRun] 跳过创建安装目录: $InstallDir" "INFO"
+        } else {
+            New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+            Write-Log "创建安装目录: $InstallDir" "INFO"
+        }
     }
 
     $AddonUrl = "https://raw.githubusercontent.com/ahujasid/blender-mcp/$UpstreamRef/addon.py"
     $AddonDest = Join-Path $InstallDir "addon.py"
 
-    try {
-        Write-Log "正在下载 Blender 插件..." "INFO"
-        Invoke-WebRequest -Uri $AddonUrl -OutFile $AddonDest -UseBasicParsing
-        Write-Log "插件已下载至: $AddonDest" "SUCCESS"
-    } catch {
-        Write-Log "下载插件失败，请检查网络。" "ERROR"
+    if ($DryRun) {
+        Write-Log "[DryRun] 跳过下载插件: $AddonUrl" "INFO"
+    } else {
+        try {
+            Write-Log "正在下载 Blender 插件..." "INFO"
+            Invoke-WebRequest -Uri $AddonUrl -OutFile $AddonDest -UseBasicParsing
+            Write-Log "插件已下载至: $AddonDest" "SUCCESS"
+        } catch {
+            Write-Log "下载插件失败，请检查网络。" "ERROR"
+            throw "插件下载失败。"
+        }
     }
 
     # 4. 配置 MCP 客户端
@@ -284,7 +319,7 @@ try {
         $ConfigPath = Read-Host "请输入 MCP 配置文件路径 (留空跳过)"
     }
 
-    if (-not $SkipConfig -and -not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+    if (-not $NoConfigWrite -and -not [string]::IsNullOrWhiteSpace($ConfigPath)) {
         $BlenderConfig = @{
             command = "cmd"
             args = @("/c", "uvx", "blender-mcp")
@@ -295,6 +330,8 @@ try {
             }
         }
         Update-McpConfigSafely -ConfigPath $ConfigPath -ServerConfig $BlenderConfig
+    } else {
+        Write-Log "跳过 MCP 配置写入。" "INFO"
     }
 
     Write-Log "=======================================" "INFO"

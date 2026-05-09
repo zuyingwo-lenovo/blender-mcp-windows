@@ -32,7 +32,7 @@ This toolkit provides a **semi-automated** deployment solution for [Blender MCP]
 ### 5.1 Enable the Addon in Blender
 1. Open Blender.
 2. Go to `Edit` -> `Preferences` -> `Add-ons`.
-3. Click `Install...` and select `addon.py` from your installation directory (e.g., `%LOCALAPPDATA%\blender-mcp-windows\addon.py`).
+3. Click `Install...` and select `addon.py` from your installation directory (default: `%LOCALAPPDATA%\blender-mcp-windows\addon.py`).
 4. Enable `Interface: Blender MCP`.
 
 ### 5.2 Connection Sequence

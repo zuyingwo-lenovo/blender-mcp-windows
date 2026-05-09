@@ -32,7 +32,7 @@
 ### 5.1 在 Blender 中启用插件
 1. 打开 Blender。
 2. 进入 `Edit` -> `Preferences` -> `Add-ons`。
-3. 点击 `Install...`，选择安装目录下的 `addon.py`。
+3. 点击 `Install...`，选择安装目录下的 `addon.py` (默认路径: `%LOCALAPPDATA%\blender-mcp-windows\addon.py`)。
 4. 勾选 `Interface: Blender MCP` 启用。
 
 ### 5.2 验证与连接
