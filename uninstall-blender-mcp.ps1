@@ -26,6 +26,6 @@ if (Test-Path $InstallDir) {
 Write-Host ""
 Write-Host "请注意，您还需要手动执行以下操作：" -ForegroundColor Cyan
 Write-Host "1. 在 Blender 中禁用并删除 'Interface: Blender MCP' 插件" -ForegroundColor Cyan
-Write-Host "2. 从 Antigravity 配置文件中删除 blender mcpServers 节点" -ForegroundColor Cyan
+Write-Host "2. 从您的 MCP 客户端 (Claude/Cursor/Windsurf) 配置文件中删除 'blender' 节点" -ForegroundColor Cyan
 Write-Host ""
 Read-Host "按回车键退出"

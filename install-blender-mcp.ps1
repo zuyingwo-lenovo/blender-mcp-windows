@@ -25,6 +25,58 @@ function Write-Log {
     }
 }
 
+function Get-BlenderPath {
+    # 1. 尝试注册表
+    $regPaths = @(
+        "HKLM:\SOFTWARE\Blender Foundation\Blender",
+        "HKCU:\SOFTWARE\Blender Foundation\Blender"
+    )
+    foreach ($regPath in $regPaths) {
+        if (Test-Path $regPath) {
+            $installDir = (Get-ItemProperty $regPath -ErrorAction SilentlyContinue).InstallDir
+            if ($installDir -and (Test-Path $installDir)) { return $installDir }
+        }
+    }
+    
+    # 2. 尝试常见安装位置
+    $commonPaths = @(
+        "C:\Program Files\Blender Foundation",
+        "$env:ProgramFiles\Blender Foundation",
+        "$env:ProgramFiles(x86)\Blender Foundation"
+    )
+    foreach ($basePath in $commonPaths) {
+        if (Test-Path $basePath) {
+            # 获取最新版本的文件夹 (例如 Blender 4.2)
+            $latest = Get-ChildItem $basePath -Directory | Where-Object { $_.Name -match "Blender" } | Sort-Object Name -Descending | Select-Object -First 1
+            if ($latest) { return $latest.FullName }
+        }
+    }
+    return $null
+}
+
+function Get-MCPConfigs {
+    $configs = @()
+    
+    # Claude Desktop
+    $claude = Join-Path $env:APPDATA "Claude\claude_desktop_config.json"
+    if (Test-Path $claude) { $configs += [PSCustomObject]@{ Name="Claude Desktop"; Path=$claude } }
+    
+    # Cursor
+    $cursorPaths = @(
+        Join-Path $env:APPDATA "Cursor\User\globalStorage\robbie.cursor-mcp\mcp.json",
+        Join-Path $env:APPDATA "Cursor\User\globalStorage\mcp-servers.json"
+    )
+    foreach ($p in $cursorPaths) {
+        if (Test-Path $p) { $configs += [PSCustomObject]@{ Name="Cursor"; Path=$p }; break }
+    }
+    
+    # Windsurf
+    $windsurf = Join-Path $env:USERPROFILE ".codeium\windsurf\mcp_config.json"
+    if (Test-Path $windsurf) { $configs += [PSCustomObject]@{ Name="Windsurf"; Path=$windsurf } }
+
+    return $configs
+}
+
 Write-Log "开始 Blender MCP 部署流程" "INFO"
 Write-Log "=======================================" "INFO"
 
@@ -72,15 +124,14 @@ if (-not $UvInstalled) {
     }
 }
 
-# 3. 检查 Blender 并下载插件
-$BlenderPath = "C:\Program Files\Blender Foundation\Blender 5.1"
-Write-Log "检查用户指定的 Blender 路径: $BlenderPath" "INFO"
+# 3. 检查 Blender
+Write-Log "正在搜索 Blender 安装路径..." "INFO"
+$BlenderPath = Get-BlenderPath
 
-if (-not (Test-Path $BlenderPath)) {
-    Write-Log "未找到指定的 Blender 目录: $BlenderPath" "WARN"
-    Write-Log "脚本将继续下载插件，您可能需要手动在 Blender 中安装。" "WARN"
+if ($null -eq $BlenderPath) {
+    Write-Log "未能自动检测到 Blender。请确保已安装 Blender (推荐 4.0+)。" "WARN"
 } else {
-    Write-Log "Blender 目录存在。" "SUCCESS"
+    Write-Log "检测到 Blender: $BlenderPath" "SUCCESS"
 }
 
 $InstallDir = "C:\MCP\blender-mcp"
@@ -101,61 +152,75 @@ try {
     Write-Log "请手动从 GitHub 下载 addon.py 并放入 $InstallDir" "WARN"
 }
 
-# 4. 配置 Antigravity MCP
-Write-Log "正在配置 Antigravity MCP 客户端..." "INFO"
-Write-Log "由于 Antigravity 的配置文件路径可能因系统而异，请提供其配置文件的绝对路径。" "INFO"
-Write-Log "通常是一个名为 mcp.json 或类似名称的文件。" "INFO"
+# 4. 配置 MCP 客户端
+Write-Log "正在配置 MCP 客户端..." "INFO"
+$DetectedConfigs = Get-MCPConfigs
 
-$ConfigPath = Read-Host "请输入 Antigravity 配置文件的完整路径 (例如 C:\Users\YourName\.antigravity\mcp.json，留空跳过)"
+$ConfigPath = ""
+if ($DetectedConfigs.Count -gt 0) {
+    Write-Host "`n检测到以下 MCP 客户端配置：" -ForegroundColor Yellow
+    for ($i = 0; $i -lt $DetectedConfigs.Count; $i++) {
+        Write-Host "  [$($i+1)] $($DetectedConfigs[$i].Name): $($DetectedConfigs[$i].Path)"
+    }
+    Write-Host "  [0] 手动输入路径 / 跳过"
+    
+    $choice = Read-Host "`n请选择要配置的客户端编号"
+    if ($choice -match "^\d+$" -and [int]$choice -gt 0 -and [int]$choice -le $DetectedConfigs.Count) {
+        $ConfigPath = $DetectedConfigs[[int]$choice - 1].Path
+    }
+}
 
-if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
-    Write-Log "用户跳过自动配置 MCP 客户端。" "WARN"
-} elseif (-not (Test-Path $ConfigPath)) {
-    Write-Log "未找到文件: $ConfigPath。请手动将 config-example.json 中的内容添加到您的配置中。" "WARN"
-} else {
-    try {
-        # 备份原配置
-        $BackupPath = "$ConfigPath.bak_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-        Copy-Item -Path $ConfigPath -Destination $BackupPath
-        Write-Log "已备份原配置文件至: $BackupPath" "SUCCESS"
+if ([string]::IsNullOrWhiteSpace($ConfigPath) -and $choice -ne "0") {
+    $ConfigPath = Read-Host "请输入 MCP 配置文件路径 (留空跳过)"
+}
 
-        # 读取并解析 JSON
-        $JsonContent = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json -AsHashtable
-        
-        if ($null -eq $JsonContent.mcpServers) {
-            $JsonContent.Add("mcpServers", @{})
-        }
+if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+    if (Test-Path $ConfigPath) {
+        try {
+            # 备份
+            $BackupPath = "$ConfigPath.bak_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+            Copy-Item -Path $ConfigPath -Destination $BackupPath
+            Write-Log "已备份配置文件: $BackupPath" "SUCCESS"
 
-        # 准备 Blender MCP 配置
-        $BlenderConfig = @{
-            command = "cmd"
-            args = @("/c", "uvx", "blender-mcp")
-            env = @{
-                BLENDER_HOST = "localhost"
-                BLENDER_PORT = "9876"
-                DISABLE_TELEMETRY = "true"
+            # 解析并注入
+            $JsonRaw = Get-Content -Path $ConfigPath -Raw
+            if ([string]::IsNullOrWhiteSpace($JsonRaw)) { $JsonRaw = "{}" }
+            $JsonContent = $JsonRaw | ConvertFrom-Json -AsHashtable
+            
+            if (-not $JsonContent.ContainsKey("mcpServers")) {
+                $JsonContent.Add("mcpServers", @{})
             }
+
+            $BlenderConfig = @{
+                command = "cmd"
+                args = @("/c", "uvx", "blender-mcp")
+                env = @{
+                    BLENDER_HOST = "localhost"
+                    BLENDER_PORT = "9876"
+                    DISABLE_TELEMETRY = "true"
+                }
+            }
+
+            $JsonContent["mcpServers"]["blender"] = $BlenderConfig
+
+            $NewJson = $JsonContent | ConvertTo-Json -Depth 10
+            Set-Content -Path $ConfigPath -Value $NewJson -Encoding UTF8
+            Write-Log "已成功更新配置: $ConfigPath" "SUCCESS"
+        } catch {
+            Write-Log "更新配置失败: $_" "ERROR"
         }
-
-        $JsonContent.mcpServers.blender = $BlenderConfig
-
-        # 写回 JSON
-        $NewJson = $JsonContent | ConvertTo-Json -Depth 10 -Compress:$false
-        Set-Content -Path $ConfigPath -Value $NewJson -Encoding UTF8
-        Write-Log "已成功将 Blender MCP 配置写入 Antigravity 配置文件。" "SUCCESS"
-    } catch {
-        Write-Log "修改配置文件时出错: $_" "ERROR"
-        Write-Log "请手动将 config-example.json 中的内容添加到您的配置中。" "WARN"
+    } else {
+        Write-Log "路径不存在: $ConfigPath" "WARN"
     }
 }
 
 Write-Log "=======================================" "INFO"
-Write-Log "部署脚本执行完毕！" "SUCCESS"
-Write-Log "请按照以下步骤完成最终设置：" "INFO"
-Write-Log "1. 打开 Blender 5.1" "INFO"
-Write-Log "2. 进入 Edit -> Preferences -> Add-ons" "INFO"
-Write-Log "3. 点击 'Install...'，选择 $AddonDest" "INFO"
-Write-Log "4. 勾选 'Interface: Blender MCP' 启用插件" "INFO"
-Write-Log "5. 重启 Antigravity 客户端" "INFO"
-Write-Log "6. 在 Blender 3D View 侧边栏 (按 N) 点击 'Connect to Claude/Start MCP Server'" "INFO"
-Write-Log "详细说明请参考 README-部署说明.md" "INFO"
+Write-Log "部署流程完成！" "SUCCESS"
+Write-Log "" "INFO"
+Write-Log "下一步操作：" "INFO"
+Write-Log "1. 打开 Blender，进入 Preferences -> Add-ons。" "INFO"
+Write-Log "2. 点击 Install，选择 $AddonDest。" "INFO"
+Write-Log "3. 启用 'Interface: Blender MCP' 插件。" "INFO"
+Write-Log "4. 在 Blender 3D View 侧栏 (N 键) 点击 'Connect to Claude'。" "INFO"
+Write-Log "5. 重启您的 MCP 客户端 (Claude/Cursor 等)。" "INFO"
+Read-Host "按回车键退出"
